@@ -52,7 +52,7 @@
 | M0 脚手架 + 渲染验证 | ✅ 完成 | `web/` + `bridge.js` + `src-tauri/`；release 首屏与 Electron 一致 |
 | M1 数据层 + 24 命令 | ✅ 完成 | `state/store/series/reminder/i18n/update/windows/scheduler/commands` 共 10 个 Rust 模块 |
 | M2 托盘 + 单实例 + 通知 | ✅ 完成 | 托盘菜单（打开/便签/新建/退出）、单实例唤回、开机自启注册表、关窗隐藏 |
-| M3 便签窗口 | 🚧 部分 | 便签窗口可创建/隐藏/置顶/置底；**位置持久化尚未接**（见偏差 2） |
+| M3 便签窗口 | ✅ 完成 | 桌面便签创建/隐藏/置顶/置底、多屏越界夹紧、失焦沉底、400ms 防抖保存位置、拖拽穿透支持 |
 | M4 提醒链路 | ✅ 完成 | 5s tick、到期判定、通知、提醒窗、引语轮换（120 条） |
 | M5 打包 + 体积优化 | ⬜ 未开始 | Cargo 体积 profile 已在 `Cargo.toml` 注释中备好 |
 
@@ -82,12 +82,24 @@
 | 提醒窗口 | `testReminder()` 打开 `reminder.html`，可见窗口「橙子日程 · 提醒」 |
 | packaged 标志 | release 为 `true`，debug 为 `false` |
 
+### M3 实测验收（2026-11-07）
+
+| 用例 | 结果 |
+|---|---|
+| 初始位置计算 | 无 bounds 记录时默认定位至主屏右上角（x: width - 438, y: 44），夹紧在工作区内 |
+| 多屏边界安全 | 记录位置脱离屏幕（重叠 < 40px）时回退主屏；超大窗口 clamp 到显示器 workArea |
+| 拖动/缩放持久化 | 400ms 防抖更新 `settings.widget.bounds` 并写入 `plans.json`，重启后原位恢复 |
+| 失焦沉底 | 非置顶状态下失去焦点（`Focused(false)`），自动调用 `send_to_bottom` 重新置底 |
+| 无边框拖拽 | 增加 `data-tauri-drag-region="deep"` 与 `core:window:allow-start-dragging` 权限 |
+| 环境变量支持 | 支持 `WEEKLIGHT_DATA_DIR` 指定自定义数据路径，且不执行旧版数据迁移 |
+| 备份导入确认框 | 修复 `OkCancelCustom` 参数反转问题（「导入并合并」对应 Ok，「取消」对应 Cancel） |
+| 测试提醒配置遵循 | 修复 `test_reminder` 忽略 `settings.popup` / `settings.sound` 开关的问题 |
+
 ### 已知偏差（后续补齐）
 
-1. **便签位置不持久化** → 拖拽后不写回 `settings.widget.bounds`。M3 补 move/resize 防抖保存。
-2. **更新检查仍指向原作者仓库**（`OrangeCatzhang`）→ 若你的 fork 要独立发版，M5 改成自己的 `REPOSITORY_URL` 与 `latest.json`。
-3. **测试** → M1/M2 用 CDP 端到端验证；Rust 单元测试（`state`/`series` 的边界用例）留到 M5 与 `core.test.cjs` 对拍时补。
-4. **通知的最终验证** → 未安装 NSIS 包时，Windows Toast 可能因缺少开始菜单快捷方式而不显示；应用内提醒窗不受影响。M5 打包安装后复测。
+1. **更新检查仍指向原作者仓库**（`OrangeCatzhang`）→ 若你的 fork 要独立发版，M5 改成自己的 `REPOSITORY_URL` 与 `latest.json`。
+2. **测试** → M1/M2/M3 用 CDP/Win32 API 端到端验证；Rust 单元测试（`state`/`series` 的边界用例）留到 M5 与 `core.test.cjs` 对拍时补。
+3. **通知的最终验证** → 未安装 NSIS 包时，Windows Toast 可能因缺少开始菜单快捷方式而不显示；应用内提醒窗不受影响。M5 打包安装后复测。
 
 ---
 

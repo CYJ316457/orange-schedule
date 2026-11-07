@@ -18,7 +18,7 @@ pub fn run() {
     // single-instance 必须最先注册：第二实例直接聚焦主窗口（或打开便签）
     builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         if argv.iter().any(|a| a == "--widget") {
-            let _ = windows::open_widget(app);
+            let _ = windows::open_widget_enabled(app);
         } else {
             let _ = windows::show_main(app);
         }
@@ -47,7 +47,9 @@ pub fn run() {
             windows::create_tray(&handle).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
             let args: Vec<String> = std::env::args().collect();
-            if args.iter().any(|a| a == "--widget") || widget_enabled {
+            if args.iter().any(|a| a == "--widget") {
+                let _ = windows::open_widget_enabled(&handle);
+            } else if widget_enabled {
                 let _ = windows::open_widget(&handle);
             }
 

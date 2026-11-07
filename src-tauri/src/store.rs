@@ -8,10 +8,22 @@ use crate::state::{now_ms, validate_state, AppData};
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn init(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // 与 Electron 版 data-path.cjs 一致：WEEKLIGHT_DATA_DIR 非空时覆盖默认目录，且不做旧数据迁移
+    let override_dir = std::env::var("WEEKLIGHT_DATA_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+    let is_override = override_dir.is_some();
+    let dir = match override_dir {
+        Some(p) if p.is_absolute() => p,
+        Some(p) => std::env::current_dir().map_err(|e| e.to_string())?.join(p),
+        None => app.path().app_data_dir().map_err(|e| e.to_string())?,
+    };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let _ = DIR.set(dir.clone());
-    migrate_from_electron(&dir);
+    if !is_override {
+        migrate_from_electron(&dir);
+    }
     Ok(dir)
 }
 

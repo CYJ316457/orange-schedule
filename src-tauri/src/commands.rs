@@ -79,7 +79,7 @@ fn emit_state(app: &AppHandle) -> Value {
     snap
 }
 
-fn mutate<F>(app: &AppHandle, f: F) -> Result<Value, String>
+pub(crate) fn mutate<F>(app: &AppHandle, f: F) -> Result<Value, String>
 where
     F: FnOnce(&mut AppData) -> Result<(), String>,
 {
@@ -394,6 +394,11 @@ pub async fn test_reminder(app: AppHandle) -> Result<bool, String> {
         .unwrap_or_else(|| json!({}));
     let text = quote.get("text").and_then(|v| v.as_str()).unwrap_or("");
     let source = quote.get("source").and_then(|v| v.as_str()).unwrap_or("");
+    let (sound, popup) = {
+        let state = app.state::<AppState>();
+        let data = state.data.lock().map_err(|e| e.to_string())?;
+        (data.settings.sound, data.settings.popup)
+    };
 
     use tauri_plugin_notification::NotificationExt;
     let body = format!(
@@ -402,13 +407,19 @@ pub async fn test_reminder(app: AppHandle) -> Result<bool, String> {
         text,
         source
     );
-    let _ = app
+    let mut builder = app
         .notification()
         .builder()
         .title(i18n::tr("橙子日程提醒已准备好", &language))
-        .body(body)
-        .show();
-    let _ = crate::windows::show_reminder(&app, &language);
+        .body(body);
+    if sound {
+        builder = builder.sound("default");
+    }
+    let _ = builder.show();
+    // 与 Electron 版一致：关闭「独立提醒窗口」时只发系统通知
+    if popup {
+        let _ = crate::windows::show_reminder(&app, &language);
+    }
     Ok(true)
 }
 
@@ -509,9 +520,10 @@ pub async fn import_data(app: AppHandle) -> Result<Option<Value>, String> {
             .dialog()
             .message(message)
             .title(i18n::tr("导入橙子日程备份", &lang_confirm))
+            // OkCancelCustom(确认, 取消)：第一个按钮返回 true
             .buttons(MessageDialogButtons::OkCancelCustom(
-                i18n::tr("取消", &lang_confirm),
                 i18n::tr("导入并合并", &lang_confirm),
+                i18n::tr("取消", &lang_confirm),
             ))
             .blocking_show()
     })
@@ -568,24 +580,33 @@ pub fn show_main(app: AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+/// 只在状态变化时落盘，避免每次打开/关闭便签都写文件。
+pub(crate) fn set_widget_enabled(app: &AppHandle, enabled: bool) -> Result<Value, String> {
+    let current = app
+        .state::<AppState>()
+        .data
+        .lock()
+        .map(|d| d.settings.widget.enabled)
+        .map_err(|e| e.to_string())?;
+    if current == enabled {
+        return Ok(snapshot_json(app));
+    }
+    mutate(app, |data| {
+        data.settings.widget.enabled = enabled;
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub async fn open_widget(app: AppHandle) -> Result<Value, String> {
-    let snap = mutate(&app, |data| {
-        data.settings.widget.enabled = true;
-        Ok(())
-    })?;
-    crate::windows::open_widget(&app)?;
-    Ok(snap)
+    crate::windows::open_widget_enabled(&app)?;
+    Ok(snapshot_json(&app))
 }
 
 #[tauri::command]
 pub fn close_widget(app: AppHandle) -> Result<Value, String> {
-    let snap = mutate(&app, |data| {
-        data.settings.widget.enabled = false;
-        Ok(())
-    })?;
     crate::windows::close_widget(&app)?;
-    Ok(snap)
+    set_widget_enabled(&app, false)
 }
 
 #[tauri::command]
@@ -635,6 +656,5 @@ pub fn edit_task(app: AppHandle, id: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn quit(app: AppHandle) {
-    crate::windows::QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
-    app.exit(0);
+    crate::windows::quit(&app);
 }
