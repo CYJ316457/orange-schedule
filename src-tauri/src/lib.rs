@@ -44,6 +44,7 @@ pub fn run() {
             app.manage(state::AppState::new(data, startup_error.unwrap_or_default()));
 
             windows::create_main(&handle).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            windows::create_tray(&handle).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
             let args: Vec<String> = std::env::args().collect();
             if args.iter().any(|a| a == "--widget") || widget_enabled {

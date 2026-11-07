@@ -12,10 +12,6 @@ fn lang(app: &AppHandle) -> String {
     app.state::<AppState>().language()
 }
 
-fn tr(app: &AppHandle, key: &str) -> String {
-    i18n::tr(key, &lang(app))
-}
-
 fn packaged() -> bool {
     !cfg!(debug_assertions)
 }
@@ -109,6 +105,7 @@ fn refresh_titles(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("reminder") {
         let _ = w.set_title(&i18n::tr("橙子日程 · 提醒", &language));
     }
+    let _ = crate::windows::refresh_tray(app);
 }
 
 // ---------------------------------------------------------------- commands
@@ -615,9 +612,7 @@ pub fn widget_settings(app: AppHandle, patch: Value) -> Result<Value, String> {
     })?;
 
     if let Some(on_top) = on_top_patch {
-        if let Some(widget) = app.get_webview_window("widget") {
-            let _ = widget.set_always_on_top(on_top);
-        }
+        let _ = crate::windows::apply_widget_layer(&app, on_top);
     }
     let _ = language;
     Ok(snap)

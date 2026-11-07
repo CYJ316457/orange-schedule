@@ -585,11 +585,3 @@ pub fn due_tasks(tasks: &[Task], now: i64) -> Vec<Task> {
     out.sort_by_key(|t| at_ms(t).unwrap_or(i64::MAX));
     out
 }
-
-pub fn widget_enabled(state: &AppState) -> bool {
-    state
-        .data
-        .lock()
-        .map(|d| d.settings.widget.enabled)
-        .unwrap_or(false)
-}

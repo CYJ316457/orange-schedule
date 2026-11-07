@@ -51,7 +51,7 @@
 |---|---|---|
 | M0 脚手架 + 渲染验证 | ✅ 完成 | `web/` + `bridge.js` + `src-tauri/`；release 首屏与 Electron 一致 |
 | M1 数据层 + 24 命令 | ✅ 完成 | `state/store/series/reminder/i18n/update/windows/scheduler/commands` 共 10 个 Rust 模块 |
-| M2 托盘 + 单实例 + 通知 | 🚧 部分 | 单实例/通知/开机自启已接入；**托盘菜单尚未实现**（见偏差 1） |
+| M2 托盘 + 单实例 + 通知 | ✅ 完成 | 托盘菜单（打开/便签/新建/退出）、单实例唤回、开机自启注册表、关窗隐藏 |
 | M3 便签窗口 | 🚧 部分 | 便签窗口可创建/隐藏/置顶/置底；**位置持久化尚未接**（见偏差 2） |
 | M4 提醒链路 | ✅ 完成 | 5s tick、到期判定、通知、提醒窗、引语轮换（120 条） |
 | M5 打包 + 体积优化 | ⬜ 未开始 | Cargo 体积 profile 已在 `Cargo.toml` 注释中备好 |
@@ -71,12 +71,23 @@
 | 提醒窗口 | `testReminder` 打开 `reminder.html`，120 条引语可用 |
 | 字段兼容 | 落盘 JSON 的 camelCase 字段、`seriesId/seriesIndex`、`done` 与 Electron 版一致 |
 
+### M2 实测验收（2026-11-07，release 构建）
+
+| 用例 | 结果 |
+|---|---|
+| 托盘图标创建 | 进程内存在 `tray_icon_app` 宿主窗口，菜单项为 打开/便签/新建/退出 |
+| 关窗即隐藏 | `WM_CLOSE` 后主窗从可见窗口列表消失，进程存活 |
+| 单实例唤回 | 再次启动 exe：进程数仍为 1，主窗重新可见 |
+| 开机自启 | `settings({autostart:true})` → 注册表 `HKCU\...\Run` 写入 `橙子日程 = <exe> --hidden`；关闭后条目清除 |
+| 提醒窗口 | `testReminder()` 打开 `reminder.html`，可见窗口「橙子日程 · 提醒」 |
+| packaged 标志 | release 为 `true`，debug 为 `false` |
+
 ### 已知偏差（后续补齐）
 
-1. **托盘菜单未实现** → 当前关闭主窗后只能重新启动 exe 才会显示主窗（单实例会聚焦）。M2 补 `TrayIconBuilder`。
-2. **便签位置不持久化** → 拖拽后不写回 `settings.widget.bounds`。M3 补 move/resize 防抖保存。
-3. **更新检查仍指向原作者仓库**（`OrangeCatzhang`）→ 若你的 fork 要独立发版，M5 改成自己的 `REPOSITORY_URL` 与 `latest.json`。
-4. **测试** → M1 用 CDP 端到端验证；Rust 单元测试（`state`/`series` 的边界用例）留到 M2 与 `core.test.cjs` 对拍时补。
+1. **便签位置不持久化** → 拖拽后不写回 `settings.widget.bounds`。M3 补 move/resize 防抖保存。
+2. **更新检查仍指向原作者仓库**（`OrangeCatzhang`）→ 若你的 fork 要独立发版，M5 改成自己的 `REPOSITORY_URL` 与 `latest.json`。
+3. **测试** → M1/M2 用 CDP 端到端验证；Rust 单元测试（`state`/`series` 的边界用例）留到 M5 与 `core.test.cjs` 对拍时补。
+4. **通知的最终验证** → 未安装 NSIS 包时，Windows Toast 可能因缺少开始菜单快捷方式而不显示；应用内提醒窗不受影响。M5 打包安装后复测。
 
 ---
 

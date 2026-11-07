@@ -1,4 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::i18n;
@@ -185,4 +187,101 @@ pub fn emit_to_main(app: &AppHandle, event: &str, payload: impl serde::Serialize
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.emit(event, payload);
     }
+}
+
+// ---------------------------------------------------------------- tray
+
+fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+    let lang = app.state::<AppState>().language();
+    let open = MenuItem::with_id(
+        app,
+        "open",
+        i18n::tr("打开橙子日程", &lang),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    let widget = MenuItem::with_id(
+        app,
+        "widget",
+        i18n::tr("桌面便签", &lang),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    let new = MenuItem::with_id(
+        app,
+        "new",
+        i18n::tr("新建计划", &lang),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        i18n::tr("退出橙子日程（停止提醒）", &lang),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    let separator = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
+    Menu::with_items(app, &[&open, &widget, &new, &separator, &quit]).map_err(|e| e.to_string())
+}
+
+pub fn create_tray(app: &AppHandle) -> Result<(), String> {
+    let menu = build_tray_menu(app)?;
+    let lang = app.state::<AppState>().language();
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or("缺少应用图标")?;
+
+    TrayIconBuilder::with_id("main-tray")
+        .icon(icon)
+        .tooltip(i18n::tr("橙子日程 · 提醒在后台运行", &lang))
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => {
+                let _ = show_main(app);
+            }
+            "widget" => {
+                let _ = open_widget(app);
+            }
+            "new" => {
+                let _ = show_main(app);
+                emit_to_main(app, "new-task", serde_json::Value::Null);
+            }
+            "quit" => {
+                QUITTING.store(true, Ordering::SeqCst);
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let _ = show_main(tray.app_handle());
+            }
+        })
+        .build(app)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn refresh_tray(app: &AppHandle) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id("main-tray") else {
+        return Ok(());
+    };
+    let lang = app.state::<AppState>().language();
+    let menu = build_tray_menu(app)?;
+    tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+    tray.set_tooltip(Some(i18n::tr("橙子日程 · 提醒在后台运行", &lang)))
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
