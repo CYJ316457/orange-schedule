@@ -585,3 +585,170 @@ pub fn due_tasks(tasks: &[Task], now: i64) -> Vec<Task> {
     out.sort_by_key(|t| at_ms(t).unwrap_or(i64::MAX));
     out
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn draft() -> serde_json::Value {
+        json!({
+            "title": "阶段复盘",
+            "date": "2026-09-28",
+            "time": "10:00",
+            "duration": 60,
+            "category": "work",
+            "reminder": 10
+        })
+    }
+
+    #[test]
+    fn reject_invalid_dates_times_and_reminders() {
+        let mut d = draft();
+        d["date"] = json!("2026-02-30");
+        assert!(clean_task(&d, None).is_err());
+
+        let mut d = draft();
+        d["time"] = json!("24:00");
+        assert!(clean_task(&d, None).is_err());
+
+        let mut d = draft();
+        d["reminder"] = json!(2);
+        assert!(clean_task(&d, None).is_err());
+
+        let mut d = draft();
+        d["title"] = json!("   ");
+        assert!(clean_task(&d, None).is_err());
+
+        let mut d = draft();
+        d["duration"] = json!(10);
+        assert!(clean_task(&d, None).is_err());
+    }
+
+    #[test]
+    fn weekly_repetitions_preserve_local_dates_across_months_and_year() {
+        let mut d = draft();
+        d["date"] = json!("2026-12-28");
+        let task = clean_task(&d, None).unwrap();
+        let series = make_series(task, &json!(4)).unwrap();
+        let dates: Vec<String> = series.iter().map(|t| t.date.clone()).collect();
+        assert_eq!(dates, vec!["2026-12-28", "2027-01-04", "2027-01-11", "2027-01-18"]);
+        assert_eq!(series.len(), 4);
+    }
+
+    #[test]
+    fn schedule_changes_rearm_reminders_but_notes_do_not() {
+        let task = clean_task(&draft(), None).unwrap();
+        let mut old = task.clone();
+        old.notified_at = Some(123456);
+
+        // 修改备注：保持 notified_at
+        let mut edit_notes = serde_json::to_value(&old).unwrap();
+        edit_notes["notes"] = json!("新备注");
+        let cleaned_notes = clean_task(&edit_notes, Some(&old)).unwrap();
+        assert_eq!(cleaned_notes.notified_at, Some(123456));
+
+        // 修改时间：重置 notified_at
+        let mut edit_time = serde_json::to_value(&old).unwrap();
+        edit_time["time"] = json!("11:00");
+        let cleaned_time = clean_task(&edit_time, Some(&old)).unwrap();
+        assert_eq!(cleaned_time.notified_at, None);
+    }
+
+    #[test]
+    fn daily_repetition_endpoints_and_calendar_boundaries() {
+        let cases = [
+            ("2030-01-30", "2030-02-02", vec!["2030-01-30", "2030-01-31", "2030-02-01", "2030-02-02"]),
+            ("2027-02-28", "2027-03-01", vec!["2027-02-28", "2027-03-01"]),
+            ("2028-02-28", "2028-03-01", vec!["2028-02-28", "2028-02-29", "2028-03-01"]), // 闰年
+            ("2030-12-31", "2031-01-02", vec!["2030-12-31", "2031-01-01", "2031-01-02"]), // 跨年
+        ];
+        for (start, until, expected) in cases {
+            let mut d = draft();
+            d["date"] = json!(start);
+            let task = clean_task(&d, None).unwrap();
+            let repeat = json!({ "frequency": "daily", "until": until });
+            let series = make_series(task, &repeat).unwrap();
+            let dates: Vec<String> = series.iter().map(|t| t.date.clone()).collect();
+            assert_eq!(dates, expected);
+        }
+    }
+
+    #[test]
+    fn daily_repetition_rejects_reversed_and_invalid_end_dates() {
+        let task = clean_task(&draft(), None).unwrap();
+        // 结束日期早于开始日期
+        assert!(make_series(task.clone(), &json!({ "frequency": "daily", "until": "2026-09-20" })).is_err());
+        // 非法日期格式
+        assert!(make_series(task.clone(), &json!({ "frequency": "daily", "until": "2026-02-30" })).is_err());
+        assert!(make_series(task.clone(), &json!({ "frequency": "daily", "until": "not-a-date" })).is_err());
+    }
+
+    #[test]
+    fn weekdays_repetition_skips_weekends() {
+        // 2026-10-16 是周五，17-18 是周末，19 是周一，20 是周二
+        let mut d = draft();
+        d["date"] = json!("2026-10-16");
+        let task = clean_task(&d, None).unwrap();
+        let repeat = json!({ "frequency": "weekdays", "until": "2026-10-20" });
+        let series = make_series(task, &repeat).unwrap();
+        let dates: Vec<String> = series.iter().map(|t| t.date.clone()).collect();
+        assert_eq!(dates, vec!["2026-10-16", "2026-10-19", "2026-10-20"]);
+    }
+
+    #[test]
+    fn due_tasks_threshold_and_snooze() {
+        let mut task = clean_task(&draft(), None).unwrap();
+        // draft: 2026-09-28 10:00, reminder: 10min -> threshold: 09:50:00
+        let threshold = at_ms(&task).unwrap() - 10 * 60000;
+
+        assert_eq!(due_tasks(&[task.clone()], threshold - 1).len(), 0);
+        assert_eq!(due_tasks(&[task.clone()], threshold).len(), 1);
+
+        // 已提醒后不再触发
+        task.notified_at = Some(threshold);
+        assert_eq!(due_tasks(&[task.clone()], threshold + 1000).len(), 0);
+
+        // 稍后提醒生效
+        task.snooze_until = Some(threshold + 600000);
+        assert_eq!(due_tasks(&[task.clone()], threshold + 599999).len(), 0);
+        assert_eq!(due_tasks(&[task.clone()], threshold + 600000).len(), 1);
+
+        // 已完成或不提醒不触发
+        task.done = true;
+        assert_eq!(due_tasks(&[task.clone()], threshold + 700000).len(), 0);
+    }
+
+    #[test]
+    fn validate_state_rejects_duplicate_ids_and_invalid_version() {
+        let task = clean_task(&draft(), None).unwrap();
+        let valid_json = json!({
+            "version": 1,
+            "tasks": [task],
+            "settings": {},
+            "history": []
+        });
+        assert!(validate_state(&valid_json).is_ok());
+
+        // 重复 ID
+        let mut task2 = task.clone();
+        task2.id = task.id.clone();
+        let duplicate_json = json!({
+            "version": 1,
+            "tasks": [task.clone(), task2],
+            "settings": {},
+            "history": []
+        });
+        assert!(validate_state(&duplicate_json).is_err());
+
+        // 错误版本
+        let bad_ver_json = json!({
+            "version": 2,
+            "tasks": [task],
+            "settings": {},
+            "history": []
+        });
+        assert!(validate_state(&bad_ver_json).is_err());
+    }
+}

@@ -218,3 +218,99 @@ pub fn apply_task_action(state: &mut AppData, request: &Value) -> Result<(), &'s
     }
     Ok(())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_task(id: &str, date: &str, series_id: Option<&str>, series_index: Option<i64>) -> Task {
+        Task {
+            id: id.to_string(),
+            title: "重复阅读".to_string(),
+            date: date.to_string(),
+            time: "09:00".to_string(),
+            duration: 30,
+            reminder: 10,
+            category: "study".to_string(),
+            priority: "normal".to_string(),
+            notes: "".to_string(),
+            done: false,
+            created_at: 1700000000000,
+            updated_at: 1700000000000,
+            notified_at: None,
+            snooze_until: None,
+            series_id: series_id.map(|s| s.to_string()),
+            series_index,
+        }
+    }
+
+    #[test]
+    fn series_validation_allows_single_tasks_and_gaps() {
+        let tasks = vec![
+            sample_task("plain", "2030-06-10", None, None),
+            sample_task("s0", "2030-06-11", Some("series-a"), Some(0)),
+            sample_task("s2", "2030-06-13", Some("series-a"), Some(2)), // 允许序号有间隔
+        ];
+        assert!(validate_series_tasks(&tasks).is_ok());
+    }
+
+    #[test]
+    fn series_validation_rejects_duplicate_index_and_invalid_metadata() {
+        let duplicate = vec![
+            sample_task("s1", "2030-06-10", Some("group"), Some(1)),
+            sample_task("s2", "2030-06-11", Some("group"), Some(1)),
+        ];
+        assert!(validate_series_tasks(&duplicate).is_err());
+
+        let bad_index = vec![
+            sample_task("s1", "2030-06-10", Some("group"), Some(-1)),
+        ];
+        assert!(validate_series_tasks(&bad_index).is_err());
+    }
+
+    #[test]
+    fn preview_and_apply_following_action() {
+        let tasks = vec![
+            sample_task("s0", "2030-06-10", Some("group"), Some(0)),
+            sample_task("s1", "2030-06-11", Some("group"), Some(1)),
+            sample_task("s2", "2030-06-12", Some("group"), Some(2)),
+            sample_task("s3", "2030-06-13", Some("group"), Some(3)),
+        ];
+        let mut app_data = AppData {
+            version: 1,
+            tasks: tasks.clone(),
+            settings: Default::default(),
+            history: vec![],
+        };
+
+        // 从第 2 项（index 1）批量完成后续
+        let preview = preview_task_action(&tasks, "s1", "complete").unwrap();
+        assert_eq!(preview.source, "series");
+        assert_eq!(preview.items.len(), 3); // s1, s2, s3
+
+        // 提交批量操作
+        let request = json!({
+            "id": "s1",
+            "action": "complete",
+            "scope": "following",
+            "token": preview.token
+        });
+        assert!(apply_task_action(&mut app_data, &request).is_ok());
+
+        assert!(!app_data.tasks[0].done); // s0 未完成
+        assert!(app_data.tasks[1].done);  // s1 已完成
+        assert!(app_data.tasks[2].done);  // s2 已完成
+        assert!(app_data.tasks[3].done);  // s3 已完成
+
+        // 伪造 token 应当被拒绝
+        let bad_token_req = json!({
+            "id": "s1",
+            "action": "complete",
+            "scope": "following",
+            "token": "bad-token-123456"
+        });
+        assert!(apply_task_action(&mut app_data, &bad_token_req).is_err());
+    }
+}

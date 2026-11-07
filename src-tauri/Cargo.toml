@@ -12,7 +12,7 @@ name = "weeklight_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2" }
+tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
 tauri = { version = "2.11.2", features = ["tray-icon", "image-ico", "image-png"] }
@@ -36,10 +36,9 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
 ] }
 
-# M0 观察用；正式版按迁移方案 §8 打开：
-# [profile.release]
-# opt-level = "s"
-# lto = true
-# codegen-units = 1
-# panic = "abort"
-# strip = true
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

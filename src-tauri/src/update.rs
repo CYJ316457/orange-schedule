@@ -6,11 +6,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::i18n;
 use crate::state::AppState;
 
-pub const REPOSITORY_URL: &str = "https://github.com/OrangeCatzhang/orange-schedule";
+pub const REPOSITORY_URL: &str = "https://github.com/CYJ316457/orange-schedule";
 const MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/OrangeCatzhang/orange-schedule/main/docs/updates/latest.json";
+    "https://raw.githubusercontent.com/CYJ316457/orange-schedule/main/docs/updates/latest.json";
 const RELEASES_API: &str =
-    "https://api.github.com/repos/OrangeCatzhang/orange-schedule/releases/latest";
+    "https://api.github.com/repos/CYJ316457/orange-schedule/releases/latest";
 const MAX_NOTES: usize = 10000;
 const MANUAL_SUFFIX: &str = "请稍后重试，或打开官方下载页手动下载。";
 
@@ -306,4 +306,70 @@ pub fn schedule(app: &AppHandle) {
             tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
         }
     });
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_version_valid_and_invalid() {
+        assert_eq!(parse_version("0.0.0"), Some([0, 0, 0]));
+        assert_eq!(parse_version("1.2.1"), Some([1, 2, 1]));
+        assert_eq!(parse_version("12.34.567"), Some([12, 34, 567]));
+
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("1.2"), None);
+        assert_eq!(parse_version("v1.2.1"), None);
+        assert_eq!(parse_version("01.2.3"), None);
+        assert_eq!(parse_version("1.02.3"), None);
+        assert_eq!(parse_version("1.2.3-beta"), None);
+    }
+
+    #[test]
+    fn compare_versions_behavior() {
+        assert_eq!(compare_versions("1.1.10", "1.1.9"), Some(1));
+        assert_eq!(compare_versions("1.10.0", "1.9.99"), Some(1));
+        assert_eq!(compare_versions("2.0.0", "1.99.99"), Some(1));
+        assert_eq!(compare_versions("1.1.9", "1.1.10"), Some(-1));
+        assert_eq!(compare_versions("1.2.1", "1.2.1"), Some(0));
+    }
+
+    #[test]
+    fn parse_release_detects_newer_stable_and_rejects_prerelease() {
+        let release_json = json!({
+            "tag_name": "v1.3.0",
+            "draft": false,
+            "prerelease": false,
+            "body": "更新说明",
+            "published_at": "2026-11-01T00:00:00Z",
+            "assets": [{
+                "name": "OrangeSchedule-Setup-1.3.0.exe",
+                "state": "uploaded",
+                "size": 123456,
+                "browser_download_url": format!("{}/releases/download/v1.3.0/OrangeSchedule-Setup-1.3.0.exe", REPOSITORY_URL)
+            }]
+        });
+
+        // 当前版本 1.2.1，发现 1.3.0
+        let parsed = parse_release(&release_json, "1.2.1", "zh-CN").unwrap();
+        assert!(parsed.is_some());
+        let r = parsed.unwrap();
+        assert_eq!(r.version, "1.3.0");
+
+        // 当前版本 1.3.0，没有更新
+        let same = parse_release(&release_json, "1.3.0", "zh-CN").unwrap();
+        assert!(same.is_none());
+
+        // draft 或 prerelease 应当报错
+        let mut draft_json = release_json.clone();
+        draft_json["draft"] = json!(true);
+        assert!(parse_release(&draft_json, "1.2.1", "zh-CN").is_err());
+
+        let mut pre_json = release_json.clone();
+        pre_json["prerelease"] = json!(true);
+        assert!(parse_release(&pre_json, "1.2.1", "zh-CN").is_err());
+    }
 }
