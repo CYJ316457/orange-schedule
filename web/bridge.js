@@ -9,7 +9,7 @@
  * ------------------------------------------------------------------
  */
 (function () {
-  const USE_TAURI = false; // ← M1 改成 true
+  const USE_TAURI = true; // M1：接通真实 Rust 后端
 
   // ---------- 真实 Tauri 通道（M1 启用） ----------
   const tauriInvoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);

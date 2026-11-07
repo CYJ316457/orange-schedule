@@ -45,6 +45,41 @@
 
 ---
 
+## 0.2 实施进度
+
+| 阶段 | 状态 | 交付 |
+|---|---|---|
+| M0 脚手架 + 渲染验证 | ✅ 完成 | `web/` + `bridge.js` + `src-tauri/`；release 首屏与 Electron 一致 |
+| M1 数据层 + 24 命令 | ✅ 完成 | `state/store/series/reminder/i18n/update/windows/scheduler/commands` 共 10 个 Rust 模块 |
+| M2 托盘 + 单实例 + 通知 | 🚧 部分 | 单实例/通知/开机自启已接入；**托盘菜单尚未实现**（见偏差 1） |
+| M3 便签窗口 | 🚧 部分 | 便签窗口可创建/隐藏/置顶/置底；**位置持久化尚未接**（见偏差 2） |
+| M4 提醒链路 | ✅ 完成 | 5s tick、到期判定、通知、提醒窗、引语轮换（120 条） |
+| M5 打包 + 体积优化 | ⬜ 未开始 | Cargo 体积 profile 已在 `Cargo.toml` 注释中备好 |
+
+### M1 实测验收（2026-11-07）
+
+通过 WebView2 CDP 直接调用 `window.weeklight`，验证完整 IPC → Rust → `plans.json` 往返：
+
+| 用例 | 结果 |
+|---|---|
+| 空标题 / 非法时长 | 分别返回「请填写 1–160 字的计划名称」「时长须为 15–1440 分钟」 |
+| 新建单次任务 | `tasks: 0 → 1`，落盘 `plans.json` |
+| 新建每周 4 次 | `tasks: 1 → 5`，`seriesId` 一致、`seriesIndex` 0–3 |
+| 系列预览 / 批量完成 | `source=series`、`followingCount=3`，批量完成 `3/4` |
+| 重启持久化 | 重启后 `tasks` 仍为原值 |
+| 便签窗口 | `widget.html` 页面成功加载，关闭后进程保留（与 Electron 一致） |
+| 提醒窗口 | `testReminder` 打开 `reminder.html`，120 条引语可用 |
+| 字段兼容 | 落盘 JSON 的 camelCase 字段、`seriesId/seriesIndex`、`done` 与 Electron 版一致 |
+
+### 已知偏差（后续补齐）
+
+1. **托盘菜单未实现** → 当前关闭主窗后只能重新启动 exe 才会显示主窗（单实例会聚焦）。M2 补 `TrayIconBuilder`。
+2. **便签位置不持久化** → 拖拽后不写回 `settings.widget.bounds`。M3 补 move/resize 防抖保存。
+3. **更新检查仍指向原作者仓库**（`OrangeCatzhang`）→ 若你的 fork 要独立发版，M5 改成自己的 `REPOSITORY_URL` 与 `latest.json`。
+4. **测试** → M1 用 CDP 端到端验证；Rust 单元测试（`state`/`series` 的边界用例）留到 M2 与 `core.test.cjs` 对拍时补。
+
+---
+
 ## 1. 迁移边界
 
 ### 1.1 原样保留（`web/` 目录）
