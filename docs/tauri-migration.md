@@ -1,6 +1,7 @@
 # 橙子日程 → Tauri 2 迁移方案
 
 > 目标：**常驻内存 ≤ 50 MB，安装包 ≤ 5 MB**，功能与 Electron 版 1:1 对齐。
+> **M0 实测校正（2026-11-07）：50 MB 在 WebView2 上不可达 —— 空白页地板即 76.5 MB；现实目标改为 90–115 MB。详见 §0.1。**
 > 基线版本：`v1.2.1`（Electron 44.4.5）｜Fork：`CYJ316457/orange-schedule`
 > 文档日期：2026-11-07
 
@@ -8,10 +9,10 @@
 
 ## 0. 结论摘要
 
-| 指标 | Electron 现状 | Tauri 目标 | 依据 |
+| 指标 | Electron 现状（估算） | Tauri（M0 实测） | 依据 |
 |---|---|---|---|
-| 常驻内存（全部进程合计） | 250–350 MB | **50–70 MB**（严格 50 MB 需关 GPU） | 去掉 Chromium 多进程 |
-| 安装包 | 111.9 MB | **2.5–4 MB** | 不打包浏览器内核 |
+| 常驻内存（任务管理器口径） | 250–350 MB | **98–113 MB** | M0 实测，见 §0.1 |
+| 安装包 | 111.9 MB | **2.5–4 MB**（待 M5 验证） | 不打包浏览器内核 |
 | 安装后占用 | 250–350 MB | **8–12 MB** | Rust 二进制 + 静态资源 |
 | 空闲 CPU | 0.1–0.5% | **< 0.05%** | 5s tick 为 Rust 原生定时器 |
 | 冷启动 | 1.5–3 s | **0.3–0.8 s** | 无 Chromium 初始化 |
@@ -20,7 +21,27 @@
 
 1. **前端零改动。** 所有页面都只通过 `window.weeklight` 这一个对象访问后端（`renderer.js:1`、`widget.js:1`、`reminder.js:1`、`task-actions.js:3`、`updates.js:2`）。写一个 `bridge.js` 把同名对象映射到 `invoke/listen`，`renderer.js` 一行都不用改。
 2. **后端规模很小，值得整体重写。** 主进程相关代码合计约 **700 行**（`main.cjs` 133 + `core.cjs` 73 + `task-series.cjs` 52 + `widget-controller.cjs` 55 + `update-*.cjs` 255 + `login-settings.cjs` 58 + 其他约 70），Rust 重写工作量约 6–10 人日。
-3. **50 MB 不是白拿的。** Tauri 默认单窗口约 70–100 MB（WebView2 自身有 browser/renderer/GPU 三个进程）。要到 50 MB 必须叠加：单窗口 + 便签默认关 + `--disable-gpu` + V8 堆上限。方案第 9 节给出调优阶梯。
+3. **50 MB 不可达（已实测）。** 原方案按「Tauri 默认 70–100 MB」估算，M0 实测为 **113 MB**；即便关 GPU 也只有 **98 MB**，而空白页地板就有 **76.5 MB**。这是 WebView2 的进程模型决定的，裁剪应用代码无法消除。现实目标应定为 **90–115 MB**。
+
+### 0.1 M0 实测数据（2026-11-07）
+
+环境：Windows 10 19045 / WebView2 **157.0.4341.42** / release 构建 / 窗口 1450×950 / 静置 60 秒；
+统计范围：`weeklight.exe` 及其全部 `msedgewebview2.exe` 子进程（排除 `conhost`）。
+
+| 配置 | 进程数 | 私有工作集（任务管理器口径） | Private Bytes | Working Set 合计 |
+|---|---|---|---|---|
+| 完整页面，默认 | 7 | **113.3 MB** | 228.1 MB | 366.0 MB |
+| 完整页面，`--disable-gpu` | 7 | **98.2 MB** | 141.2 MB | 363.5 MB |
+| 空白页，默认（WebView2 地板） | 7 | **76.5 MB** | 149.7 MB | 314.6 MB |
+
+解读：
+
+- **运行时地板 76.5 MB**：空白页不加任何业务代码就有这个量，主要是 WebView2 的 browser / renderer / GPU / utility 进程。
+- **页面本身约 37 MB**（113.3 − 76.5）：日历 DOM、内联 SVG 图标、两套语言表、i18n 运行时。这是唯一还能优化的部分。
+- **关 GPU 省约 15 MB**：代价是重绘走软件合成，滚动时 CPU 上升。
+- 三个数都远高于 50 MB，因此 **50 MB 只能通过换原生技术栈达成**（WPF 约 35–70 MB，Win32 约 10–25 MB）。
+
+> 结论：Tauri 相对 Electron 的真实收益约为 **2–3 倍**（113 MB vs 250–350 MB 估算），不是原方案写的 4–6 倍。若要严格 ≤50 MB，应改走原生方案，而不是继续调 WebView2 参数。
 
 ---
 
@@ -698,7 +719,7 @@ pub fn check(current: &str) -> Result<UpdateSnapshot, String> {
 
 ---
 
-## 7. 内存：如何真的做到 50 MB
+## 7. 内存：实测结果与调优空间（50 MB 不可达）
 
 ### 7.1 先明确「50 MB」怎么量
 
@@ -716,19 +737,31 @@ while ($queue.Count -gt 0) {
     if ($p) { $all.Add($p); $queue.Enqueue($p.Id) }
   }
 }
-$all | Select-Object ProcessName, Id, @{n='MB';e={[math]::Round($_.WorkingSet64/1MB,1)}}
-"TOTAL: {0:N1} MB" -f (($all | Measure-Object WorkingSet64 -Sum).Sum / 1MB)
+$rows = $all | ForEach-Object {
+  $perf = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($_.Id)"
+  [pscustomobject]@{
+    Name      = $_.ProcessName
+    Id        = $_.Id
+    WS_MB     = [math]::Round($_.WorkingSet64 / 1MB, 1)
+    PrivWS_MB = [math]::Round($perf.WorkingSetPrivate / 1MB, 1)   # 任务管理器口径
+  }
+}
+$rows | Format-Table -AutoSize
+"PRIVATE WS TOTAL: {0:N1} MB" -f (($rows | Measure-Object PrivWS_MB -Sum).Sum)
 ```
+
+> 注意：不要用 `WorkingSet64` 直接相加 —— 它包含进程间共享的 DLL 页，会把 113 MB 虚报成 366 MB。判断「占多少内存」应以 `WorkingSetPrivate` 之和为准。
 
 ### 7.2 调优阶梯（每级都可独立验证）
 
-| 级别 | 配置 | 预估总内存 | CPU 影响 |
-|---|---|---|---|
-| T0 | Tauri 默认，单主窗口 | 70–100 MB | 基准 |
-| T1 | 便签默认关 + 提醒窗懒创建 | 65–90 MB | 无 |
-| T2 | `--disable-gpu`（软件合成） | **50–70 MB** | 重绘时略升 |
-| T3 | + `--js-flags=--max-old-space-size=64` | **45–62 MB** | 无 |
-| T4 | + 主窗不透明 + DOM 精简 + 无大图 | **42–58 MB** | 无 |
+| 级别 | 配置 | 实测/预估（私有工作集） | CPU 影响 | 状态 |
+|---|---|---|---|---|
+| T0 | Tauri 默认，单主窗口 | **113.3 MB** | 基准 | ✅ 已实测 |
+| T1 | 便签默认关 + 提醒窗懒创建 | ~110 MB | 无 | 预计（便签默认本就关闭） |
+| T2 | `--disable-gpu`（软件合成） | **98.2 MB** | 重绘时略升 | ✅ 已实测 |
+| T3 | + `--js-flags=--max-old-space-size=64` | 90–100 MB | 无 | 待实测 |
+| T4 | + DOM 精简 / 减少 SVG 内联 / 语言表按需加载 | 85–95 MB | 无 | 待实测 |
+| — | **空白页地板** | **76.5 MB** | — | ✅ 已实测（不可再降） |
 
 **T2 / T3 的具体写法**：主窗口来自 `tauri.conf.json`，无法在代码里链式调用 `additional_browser_args`，所以用 WebView2 的全局环境变量（必须在 `Builder` 启动前设置，对所有窗口生效）：
 
@@ -763,7 +796,7 @@ let w = tauri::WebviewWindowBuilder::new(app, "widget", tauri::WebviewUrl::App("
 
 > `--disable-gpu` 在个别 WebView2 版本上可能导致黑屏或字体发虚，务必在目标机器上先验证；若出现，退回 T1（不关 GPU，55–75 MB）并靠 T3 的 V8 上限压峰值。
 
-**结论要诚实**：50 MB 属于 T2–T3 区间，**必须关 GPU 才能稳定达标**；不关 GPU 的现实区间是 **55–75 MB**（仍比 Electron 的 250–350 MB 低 4–6 倍）。如果 50 MB 是硬指标，验收就按 T3 配置跑。
+**结论（实测校正）**：50 MB 在 WebView2 上**不可达** —— 空白页地板就是 76.5 MB。现实可达区间是 **90–115 MB**（T2 实测 98.2 MB，T3/T4 预计 85–95 MB）。若 50 MB 是硬指标，必须换原生技术栈（WPF 约 35–70 MB，Win32 约 10–25 MB），继续调 WebView2 参数没有意义。
 
 ### 7.3 其他省内存的点
 
@@ -846,7 +879,7 @@ fn migrate_from_electron(dir: &std::path::Path) -> Option<String> {
 - [ ] 便签置底后点击其他窗口不抢焦点
 - [ ] 开机自启带 `--hidden`，只在托盘出现
 - [ ] `plans.json` 可双向导入导出，字段零丢失
-- [ ] **T3 配置下整棵进程树 ≤ 50 MB**（PowerShell 脚本采样 60 s 取峰值）
+- [ ] **T3/T4 配置下私有工作集 ≤ 95 MB**（PowerShell 脚本采样 60 s；空白页地板 76.5 MB 不可突破）
 - [ ] 安装包 ≤ 5 MB，安装后 ≤ 12 MB
 
 ---
@@ -883,15 +916,18 @@ fn migrate_from_electron(dir: &std::path::Path) -> Option<String> {
 
 ## 12. 预期结果对照
 
-| 指标 | Electron 1.2.1 | Tauri（T1） | Tauri（T3，验收配置） |
+| 指标 | Electron 1.2.1（估算） | Tauri（实测 T0） | Tauri（目标 T3/T4） |
 |---|---|---|---|
-| 进程数 | 5–6 | 4 | 3 |
-| 内存（全进程） | 250–350 MB | 65–90 MB | **45–62 MB** |
+| 进程数 | 5–6 | 7 | 7 |
+| 内存（私有工作集） | 250–350 MB | **113.3 MB** | 85–95 MB |
+| 内存（关 GPU） | — | **98.2 MB** | — |
 | 安装包 | 111.9 MB | 3–4 MB | 3–4 MB |
 | 安装后占用 | 250–350 MB | 9–12 MB | 9–12 MB |
 | 空闲 CPU | 0.1–0.5% | <0.05% | <0.1% |
 | 冷启动 | 1.5–3 s | 0.3–0.8 s | 0.4–1.0 s |
 | 跨平台 | Win（构建目标） | Win/Mac/Linux | 同左 |
+
+> 说明：Electron 一列仍为估算（未在本机实测原版）。Tauri 一列除「安装包/安装后占用/冷启动」外均为 M0 实测。若需要严谨对比，下一步可 `npm install` 后实测 Electron 版同一指标。
 
 ---
 

@@ -19,3 +19,9 @@
 **/*.log
 **/*.tmp
 **/node_modules/
+!/web/
+!/src-tauri/
+/src-tauri/target/
+/src-tauri/gen/schemas/
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
