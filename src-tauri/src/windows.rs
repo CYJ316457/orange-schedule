@@ -189,6 +189,7 @@ pub fn open_widget(app: &AppHandle) -> Result<(), String> {
             let _ = window.unminimize();
         }
         let _ = window.show();
+        remove_window_border(&window);
         let _ = apply_widget_layer(app, prefs.on_top);
         return Ok(());
     }
@@ -204,6 +205,7 @@ pub fn open_widget(app: &AppHandle) -> Result<(), String> {
     .max_inner_size(680.0, 1000.0)
     .decorations(false)
     .transparent(true)
+    .shadow(false)
     .resizable(true)
     .maximizable(false)
     .skip_taskbar(true)
@@ -211,6 +213,8 @@ pub fn open_widget(app: &AppHandle) -> Result<(), String> {
     .visible(false)
     .build()
     .map_err(|e| e.to_string())?;
+
+    remove_window_border(&window);
 
     // 用物理像素定位，避免多显示器不同 DPI 时逻辑坐标换算歧义
     let monitors = app.available_monitors().unwrap_or_default();
@@ -340,6 +344,41 @@ pub fn send_to_bottom(window: &tauri::WebviewWindow) -> Result<(), String> {
 pub fn send_to_bottom(_window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
+
+#[cfg(windows)]
+pub fn remove_window_border(window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWM_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+    };
+
+    if let Ok(raw) = window.hwnd() {
+        let hwnd = HWND(raw.0);
+        unsafe {
+            // Windows 11 DWMWA_BORDER_COLOR: 0xFFFFFFFE (DWMWA_COLOR_NONE) 禁止系统绘制外边框
+            let color: u32 = 0xFFFFFFFE;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                &color as *const _ as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+
+            // Windows 11 DWMWA_WINDOW_CORNER_PREFERENCE: DWMWCP_DONOTROUND 避免 DWM 给透明窗口矩形画系统圆角边框
+            let corner: DWM_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner as *const _ as *const _,
+                std::mem::size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32,
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn remove_window_border(_window: &tauri::WebviewWindow) {}
 
 #[cfg(windows)]
 pub fn set_app_user_model_id(id: &str) {
