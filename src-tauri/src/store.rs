@@ -8,20 +8,38 @@ use crate::state::{now_ms, validate_state, AppData};
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn init(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // 与 Electron 版 data-path.cjs 一致：WEEKLIGHT_DATA_DIR 非空时覆盖默认目录，且不做旧数据迁移
+    // 1. 优先使用 WEEKLIGHT_DATA_DIR 环境变量
     let override_dir = std::env::var("WEEKLIGHT_DATA_DIR")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .map(PathBuf::from);
-    let is_override = override_dir.is_some();
-    let dir = match override_dir {
+
+    // 2. 检查程序所在目录下是否存在 data/ 目录或 .portable 标记文件（便携/免安装绿色模式）
+    let portable_dir = if override_dir.is_none() {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .and_then(|dir| {
+                let data = dir.join("data");
+                if data.is_dir() || dir.join(".portable").is_file() {
+                    Some(data)
+                } else {
+                    None
+                }
+            })
+    } else {
+        None
+    };
+
+    let is_custom = override_dir.is_some() || portable_dir.is_some();
+    let dir = match override_dir.or(portable_dir) {
         Some(p) if p.is_absolute() => p,
         Some(p) => std::env::current_dir().map_err(|e| e.to_string())?.join(p),
         None => app.path().app_data_dir().map_err(|e| e.to_string())?,
     };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let _ = DIR.set(dir.clone());
-    if !is_override {
+    if !is_custom {
         migrate_from_electron(&dir);
     }
     Ok(dir)
