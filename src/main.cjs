@@ -10,6 +10,7 @@ const windowBranding=createWindowBranding({app});
 const {createLoginSettings}=require('./login-settings.cjs');
 const loginSettings=createLoginSettings({app,loginItemName:APP_ID});
 const {resolveDataPath}=require('./data-path.cjs');
+const {createReloader}=require('./state-sync.cjs');
 const {createUpdateController}=require('./update-controller.cjs');
 const {REPOSITORY_URL}=require('./update-checker.cjs');
 const i18n=require('./i18n.js');
@@ -28,11 +29,12 @@ try{if(hasExistingData){const raw=JSON.parse(fs.readFileSync(dataFile,'utf8'));s
 catch(e){startupError=e.message;fs.copyFileSync(dataFile,path.join(dataDir,'plans-recovery-'+Date.now()+'.json'));}
 const t=(key,values)=>i18n.t(key,values,state.settings.language);
 const errorText=error=>i18n.translateError(error,state.settings.language);
-function persist(next){const temp=dataFile+'.tmp';fs.writeFileSync(temp,JSON.stringify(next,null,2),'utf8');if(fs.existsSync(dataFile))fs.copyFileSync(dataFile,dataFile+'.bak');fs.renameSync(temp,dataFile);state=next;}
+function persist(next){const temp=dataFile+'.tmp';fs.writeFileSync(temp,JSON.stringify(next,null,2),'utf8');if(fs.existsSync(dataFile))fs.copyFileSync(dataFile,dataFile+'.bak');fs.renameSync(temp,dataFile);state=next;stateReloader?.mark();}
 function startupStatus(){try{return {autostart:loginSettings.getOpenAtLogin(),autostartError:''};}catch(e){return {autostart:false,autostartError:t('无法读取 Windows 开机启动状态：{error}',{error:errorText(e)})};}}
 function updateSnapshot(){const update=updateController.snapshot();return {...update,error:update.error?errorText(update.error):update.error};}
 function snapshot(){return {...state,update:updateSnapshot(),dataDir,startupError:startupError?t('计划文件无法读取，已保留原文件。请从设置导入备份。{error}',{error:errorText(startupError)}):startupPreferenceError?t('语言设置暂未保存：{error}',{error:errorText(startupPreferenceError)}):'',...startupStatus(),packaged:app.isPackaged,reminderMessage:getCurrentMessage(state.settings.reminderRotation,state.settings.language),reminderMessageCount:messages.length};}
 function broadcast(){for(const w of [win,popup,widgetController?.getWindow()])if(w&&!w.isDestroyed())w.webContents.send('state',snapshot());}
+const stateReloader=createReloader({file:dataFile,readState:()=>validateState(JSON.parse(fs.readFileSync(dataFile,'utf8'))),applyState:next=>{state=next;broadcast();},onError:error=>win?.webContents.send('app-error',t('计划文件无法读取，已保留原文件。请从设置导入备份。{error}',{error:errorText(error)}))});
 function change(fn){const next=structuredClone(state);fn(next);persist(next);broadcast();return snapshot();}
 function nextReminderMessage(next){next.settings.reminderRotation=advanceMessage(next.settings.reminderRotation).rotation;}
 function notificationEncouragement(){const m=getCurrentMessage(state.settings.reminderRotation,state.settings.language);return m.text+(m.url?' — '+m.source:'');}
@@ -64,6 +66,7 @@ function showReminder(){
 function notify(title,body){if(Notification.isSupported()){const n=new Notification({title,body,silent:!state.settings.sound,icon:path.join(__dirname,'assets/icon.png')});notifications.add(n);n.on('click',showMain);n.on('close',()=>notifications.delete(n));n.on('failed',()=>notifications.delete(n));n.show();setTimeout(()=>notifications.delete(n),60000).unref();}}
 function tick(){
  try{
+  stateReloader.check();
   const due=dueTasks(state.tasks);
   if(!due.length)return;
   change(next=>{

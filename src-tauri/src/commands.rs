@@ -79,6 +79,27 @@ fn emit_state(app: &AppHandle) -> Value {
     snap
 }
 
+pub(crate) fn reload_from_disk(app: &AppHandle) -> Result<bool, String> {
+    let Some((data, error)) = crate::store::reload_from_disk() else {
+        return Ok(false);
+    };
+    if let Some(message) = error {
+        let _ = app.emit("app-error", message);
+        return Ok(false);
+    }
+    {
+        let state = app.state::<AppState>();
+        *state.data.lock().map_err(|e| e.to_string())? = data;
+        state
+            .startup_error
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clear();
+    }
+    let _ = emit_state(app);
+    Ok(true)
+}
+
 pub(crate) fn mutate<F>(app: &AppHandle, f: F) -> Result<Value, String>
 where
     F: FnOnce(&mut AppData) -> Result<(), String>,

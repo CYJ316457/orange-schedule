@@ -20,6 +20,10 @@ pub fn spawn(app: &AppHandle) {
 }
 
 fn run_tick(app: &AppHandle) -> Result<(), String> {
+    if let Err(message) = crate::commands::reload_from_disk(app) {
+        let _ = app.emit("app-error", message);
+    }
+
     let state = app.state::<AppState>();
     let lang = state.language();
     let now = now_ms();
